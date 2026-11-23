@@ -38930,7 +38930,9 @@ function soThrBoardDeps(o) {
         canStart: () => allowed() && soThrBoardCanStart(opt),
         refused: () => soThrBoardRefusal(),
         prompt: (kind, win, args) => soThrBoardPrompt(kind, win, args),
-        generate: (req, ctl) => allowed() ? soThrBoardGenerate(req, ctl, opt) : Promise.resolve({ text: '', aborted: true }),
+        generate: (req, ctl) => allowed() ? soThrBoardGenerate(req, {
+            ...ctl, isStale: () => !allowed() || !!(ctl && typeof ctl.isStale === 'function' && ctl.isStale()),
+        }, opt) : Promise.resolve({ text: '', aborted: true }),
         estimate: (t) => soEstimateTokens([{ content: String(t == null ? '' : t) }]),
         rd: soThrBoardReaderDeps(),
         cx: soThrBoardChatCx(),

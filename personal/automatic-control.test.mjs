@@ -84,3 +84,27 @@ test('phone and board injection writers clear even while prompt registry is borr
         c[key+'NoteSync']();assert.equal(slots.note,'');
     }
 });
+test('board background dependencies reject late commits and stale generations; manual work remains available', async () => {
+    const f=fixture();let writes=0, check;
+    const c=sandbox(['soThrBoardDeps'],{
+        soAutomatic:f.control,getCtx:()=>({chat:[]}), getSettings:()=>({contextDepth:10}),
+        soThrBoardState:()=>({}), soBdFlowClone:s=>s, soThrBoardCommit:()=>{writes++;return true;},
+        fixChatKey:()=> 'A', soThrBoardCanStart:()=>true, soThrBoardRefusal:()=>'',
+        soThrBoardPrompt:()=>'',soThrBoardGenerate:async(req,ctl)=>{check=ctl.isStale;return {text:'result'};},
+        soThrBoardReaderDeps:()=>({}),soThrBoardChatCx:()=>({}),soThrBoardSumOn:()=>true,
+        soThrBoardModsOn:()=>false,soThrBoardArm:()=>({}),
+    });
+    const auto=c.soThrBoardDeps({silent:true}); await auto.generate({},{});
+    f.control.setPaused(true);f.control.setPaused(false);
+    assert.equal(check(),true);assert.equal(auto.commit({},'sum'),false);assert.equal(writes,0);
+    f.control.setPaused(true);const manual=c.soThrBoardDeps({});
+    assert.equal(manual.canStart(),true);assert.equal(manual.commit({},'edit'),true);assert.equal(manual.sumOn,false);
+});
+test('arc editor stays raw while the displayed injection includes the immutable fact rule', () => {
+    const arc={currentBeat:{customText:'custom'}};
+    const c=sandbox(['currentInjectionPreview','arcInjectionPreview','soFactDirective'],{
+        getActiveConstruct:()=>({type:'arc',arc}),getCtx:()=>({substituteParams:t=>t}),FACT_PRIORITY,
+    });
+    assert.equal(c.arcInjectionPreview(arc),'custom');
+    assert.equal(c.currentInjectionPreview(),FACT_PRIORITY+'\n\ncustom');
+});
