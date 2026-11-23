@@ -12,7 +12,29 @@
  *                 不会有 CORS 问题。
  */
 
+import { createAutomaticControl, FACT_PRIORITY } from './personal/automatic-control.mjs';
 const MODULE = 'storyOracle';
+const soAutomatic = createAutomaticControl({ metadata: () => getChatMetadataSafe(), chatKey: () => fixChatKey(), messageCount: () => chatMsgCount(), save: () => saveChatMetadata() });
+function soAutomaticRefresh() {
+    const button = win && win.querySelector('#so-personal-auto');
+    if (button) { button.textContent = soAutomatic.enabled() ? '自动介入：开启（点击暂停）' : '自动介入：暂停（点击恢复）'; button.setAttribute('aria-pressed', String(soAutomatic.enabled())); }
+    const box = win && win.querySelector('#so-personal-float');
+    if (box) box.checked = getSettings().personalHidePlanFloat === true;
+}
+function soAutomaticToggle() {
+    if (!soAutomatic.setPaused(soAutomatic.enabled())) return;
+    pendingPostReplyRun = null;
+    if (activePostReplyRun && activePostReplyRun.automaticTicket) supersedePostReply();
+    // Only automatic suggestions are invalidated; a manually requested suggestion may finish.
+    if (nbeatState && nbeatState.automaticTicket) { nbeatAbortInFlight(); nbeatState = null; }
+    soThrBoardSumOwed = false;
+    applyPlanInjection({ keepManualSuggestion: true });
+    if (ENABLE_DB_BRIDGE) Promise.resolve(dbBridgeSweep('personal_pause')).catch(() => {});
+    soThrWeiyuNoteSync(); soThrBoardNoteSync();
+    soAutomaticRefresh(); renderPlanBar();
+}
+function soFactDirective(text) { return text ? FACT_PRIORITY + '\n\n' + text : ''; }
+
 
 const DEFAULT_SYSTEM_PROMPT =
 `你是「故事神谕」，一个为正在进行的角色扮演/故事服务的“戏外”分析者。
@@ -33024,6 +33046,7 @@ function soThrWeiyuApplyEvent(ev) {
 // 换聊天（CHAT_CHANGED；ST 发它时新聊天的 chat 和 chat_metadata 都已载入）：分支 / 检查点带来的、回复不在这个聊天里的活增量照「删」处理，
 // 楼号挪过的跟着挪（review-s23 I4）。定稿的增量（另一条时间线的手机历史）照旧留着（spec §4.9）。→ 手机变了没有。
 function soThrWeiyuOnChatLoad() {
+    if (!soAutomatic.enabled()) return;
     if (!soThrWeiyuSyncOn()) return false;
     return soThrWeiyuWork(null).changed;
 }
@@ -33048,6 +33071,7 @@ function soThrWeiyuRekey(idx, msg, swipe) {
 // MESSAGE_EDITED（参数 = 楼号；public/script.js messageEditDone：updateMessage 已把 mes 和 swipes[swipe_id] 都写好之后才发）：
 // 改过的回复保住它的手机内容（review-s23 C2）。/message-role、/message-name 也发它——正文没变 = 空操作。零调用。→ 手机变了没有。
 function soThrWeiyuOnEdited(id) {
+    if (!soAutomatic.enabled()) return;
     if (!soThrWeiyuSyncOn()) return false;
     const idx = Number(id);
     const at = soThrWeiyuAiAt(idx);
@@ -33063,6 +33087,7 @@ function soThrWeiyuReplyEv(type, chat, idx, msg, swipe) {
 // 与那一步同一条「要不要」（soThrWeiyuSyncWanted：勾了，或者还有活的增量 / 暂存——取消勾选之后撤回照样当场生效）；什么都没有 = 零工作。
 // 花钱的那一趟仍只在回复后那一步。之后那一步再走一遍同一个事件 = 空操作（表本身幂等）。→ 手机变了没有。
 function soThrWeiyuOnReceived(id, type) {
+    if (!soAutomatic.enabled()) return;
     if (!soThrWeiyuSyncOn() || !postReplyHandlesType(type)) return false;
     let ctx = null;
     try { ctx = getCtx(); } catch (e) { ctx = null; }
@@ -33194,6 +33219,7 @@ function soThrWeiyuAiAt(idx) {
 // MESSAGE_SWIPED（参数 = 楼号）：换到一个已有的 swipe（它存着的那一份免费还原）；新生成的 swipe 此刻什么都还没有 → 表答「无」，
 // 那一趟的同步等回复真的落地后由回复后编排来（Task 12）。→ 手机变了没有。
 function soThrWeiyuOnSwiped(id) {
+    if (!soAutomatic.enabled()) return;
     if (!soThrWeiyuSyncOn()) return false;
     const idx = Number(id);
     const at = soThrWeiyuAiAt(idx);
@@ -33203,6 +33229,7 @@ function soThrWeiyuOnSwiped(id) {
 // ✨ applyFixAsSwipe 加完新 swipe 之后：同一个剧情事件——这一楼活的增量带到新 swipe 上（不重新同步）。src = 校正前显示的那个 swipe：
 // 它不属于这份增量（例如刚划出一个新生成、它的同步还没来）就什么都不带。→ 手机变了没有。
 function soThrWeiyuOnFixer(id, src) {
+    if (!soAutomatic.enabled()) return;
     if (!soThrWeiyuSyncOn()) return false;
     const idx = Number(id);
     const at = soThrWeiyuAiAt(idx);
@@ -33218,6 +33245,7 @@ function soThrWeiyuOnFixer(id, src) {
 // 所以不按楼号判断——每份活的增量按正文找它的回复（soThrWeiyuReconcile）：还在 = 挪到它此刻的楼号（内容不动）；真的没了 = 按「删」处理
 // （没碰过 = 撤回，碰过 = 留下）、那一楼的暂存一起清掉（review-s23 C1）。一次 commit。→ 手机变了没有。
 function soThrWeiyuOnDeleted(len) {
+    if (!soAutomatic.enabled()) return;
     if (!soThrWeiyuSyncOn()) return false;
     const n = Number(len);
     if (!Number.isInteger(n) || n < 0) return false;
@@ -33256,6 +33284,7 @@ function soThrWeiyuSwipeShift(state, floor, removed) {
 // MESSAGE_SWIPE_DELETED（{messageId, swipeId, newSwipeId}；发的时候 ST 已经 splice 完、swipe_id = newSwipeId）：先挪下标；
 // 增量的 swipe 一个不剩 = 它那条回复没了 → 按「删」处理；再按「划回 newSwipeId」处理（那个 swipe 存着的一份免费还原）。一次 commit。
 function soThrWeiyuOnSwipeDeleted(data) {
+    if (!soAutomatic.enabled()) return;
     if (!soThrWeiyuSyncOn() || !soWyIsObj(data)) return false;
     const idx = Number(data.messageId);
     if (!Number.isInteger(idx)) return false;
@@ -33395,8 +33424,8 @@ function soThrWeiyuNoteSync() {
     let ctx = null;
     try { ctx = getCtx(); } catch (e) { ctx = null; }
     if (!ctx || typeof ctx.setExtensionPrompt !== 'function') return false;
-    const quiet = soThrWeiyuQuietOpen();   // t6：quiet 正在拼 = 这一格只能是空的（借用期间也写：空值带不进任何请求；挪开期间写 = 小剧场不再放回原文）
-    const text = quiet ? '' : soThrWeiyuNoteText();
+    const quiet = !soAutomatic.enabled() || soThrWeiyuQuietOpen();   // t6：quiet 正在拼 = 这一格只能是空的（借用期间也写：空值带不进任何请求；挪开期间写 = 小剧场不再放回原文）
+    const text = quiet || !soAutomatic.enabled() ? '' : soThrWeiyuNoteText();
     if (text === '' && !soThrWeiyuNoteLive && !soThrWeiyuNoteHeld(ctx)) return false;   // 从没登记过：不碰 ST
     if (!quiet && soThrBorrowing()) { soThrWeiyuNoteLater(); return false; }
     if (text === '' && !quiet && !soThrWeiyuNoteHeld(ctx)) { soThrWeiyuNoteLive = false; return false; }   // ST 换过登记表，里面本来就没有
@@ -33414,7 +33443,7 @@ function soThrWeiyuNoteSync() {
 // ST 拼提示词时问这一格要不要（public/script.js：await prompt.filter()，不给参数）。t6：聊天内的槽 ST 其实不等它（见本节开头）——留着它、
 // 说的与这一格本身一样（quiet 正在拼 = 不要），哪天 ST 真等它了也还是对的。
 function soThrWeiyuNoteFilter() {
-    return !soThrWeiyuQuietOpen();
+    return soAutomatic.enabled() && !soThrWeiyuQuietOpen();
 }
 // 非干跑的 GENERATION_STARTED（type, params, dryRun）：记下类型；quiet = 压 'q' 并同步清空这一格；别的类型顺手刷新一次（有 quiet 在拼时仍是空的）。
 function soThrWeiyuOnGenStarted(type, params, dryRun) {
@@ -38891,15 +38920,17 @@ async function soThrBoardGenerate(req, ctl, o) {
 //（false = 没写：块据此报 gone）。探针臂的 replyKind / protect 并进来（产品里没有）。
 function soThrBoardDeps(o) {
     const opt = o && typeof o === 'object' ? o : {};
+    const automaticTicket = opt.silent || opt.postReply ? soAutomatic.ticket() : null;
+    const allowed = () => !automaticTicket || soAutomatic.valid(automaticTicket);
     const cx = () => { try { return getCtx(); } catch (e) { return null; } };
     const d = {
         getState: () => { const st = soThrBoardState(); return st ? soBdFlowClone(st) : null; },
-        commit: (st, why) => soThrBoardCommit(st, why),
+        commit: (st, why) => allowed() && soThrBoardCommit(st, why),
         chatKey: () => fixChatKey(),
-        canStart: () => soThrBoardCanStart(opt),
+        canStart: () => allowed() && soThrBoardCanStart(opt),
         refused: () => soThrBoardRefusal(),
         prompt: (kind, win, args) => soThrBoardPrompt(kind, win, args),
-        generate: (req, ctl) => soThrBoardGenerate(req, ctl, opt),
+        generate: (req, ctl) => allowed() ? soThrBoardGenerate(req, ctl, opt) : Promise.resolve({ text: '', aborted: true }),
         estimate: (t) => soEstimateTokens([{ content: String(t == null ? '' : t) }]),
         rd: soThrBoardReaderDeps(),
         cx: soThrBoardChatCx(),
@@ -38907,7 +38938,7 @@ function soThrBoardDeps(o) {
         // 「读最近几楼」：0 = 一楼都不带；空 / 读不懂 = 全部（同今天每一个小剧场请求）
         depth: () => { const v = getSettings().contextDepth; if (soThrDepthNone(v)) return 0; const n = Number(v); return n > 0 ? n : Infinity; },
         meName: () => { const c = cx(); return String((c && c.name1) ?? ''); },
-        sumOn: soThrBoardSumOn() && opt.postReply !== true,   // 回复后编排那一步：锁里起的摘要只会排队被丢——P3 等锁放开再给时机
+        sumOn: soAutomatic.enabled() && soThrBoardSumOn() && opt.postReply !== true,   // 暂停时不由手动操作衍生后台摘要
         silent: opt.silent === true,
     };
     if (soThrBoardModsOn()) d.mods = true;   // 🗂 stage 3：窗口带上版主、请求里多那一段和【论坛的管理】、读版务行、按权限落下、玩家发帖前过那道门
@@ -38966,6 +38997,7 @@ async function soThrBoardRegen() {
 }
 // 安静的摘要：给排期一次「时机」（摘要旗关 / 已有一趟摘要 / 按下的请求在飞 → 什么都不做）。reason 只进 console.debug。
 function soThrBoardSumKick(reason) {
+    if (!soAutomatic.enabled()) return;
     if (!soThrBoardSumOn() || soBdSumFlight() || soBdFlight()) return;
     try { console.debug('[Story Oracle] 论坛板：摘要排期', String(reason == null ? '' : reason)); } catch (e) { /* ignore */ }
     soBdSumRun(soThrBoardDeps({ silent: true })).catch(() => 0);
@@ -39068,6 +39100,7 @@ function soThrBoardCatchPrep() {
 // MESSAGE_RECEIVED（楼号, 生成类型；ST 发它时新回复已经在 ctx.chat 里）：划出新生成 / 重新生成 / 新回复的批次表当场走一遍；「继续」= 同一条
 // 回复变长了 → 只跟着改 key。'first_message' 不是新回复。没勾、也没有活的批次 / 暂存 = 零工作。
 function soThrBoardOnReceived(id, type) {
+    if (!soAutomatic.enabled()) return;
     if (!soThrBoardOn() || !postReplyHandlesType(type)) return false;
     try {
         let ctx = null;
@@ -39086,6 +39119,7 @@ function soThrBoardOnReceived(id, type) {
 }
 // MESSAGE_SWIPED（楼号）：换到一个已有的 swipe → 它存着的那一份免费还原；划出新生成的那一刻什么都还没有 → 表答「无」。
 function soThrBoardOnSwiped(id) {
+    if (!soAutomatic.enabled()) return;
     if (!soThrBoardOn()) return false;
     try {
         const idx = Number(id);
@@ -39098,6 +39132,7 @@ function soThrBoardOnSwiped(id) {
 }
 // MESSAGE_DELETED（删完之后的楼数，不是楼号）：说明不了删的是哪一楼 → 只对一遍楼号（soBdReconcile：每份批次按正文找它的回复）。
 function soThrBoardOnDeleted(len) {
+    if (!soAutomatic.enabled()) return;
     if (!soThrBoardOn()) return false;
     const n = Number(len);
     if (!Number.isInteger(n) || n < 0) return false;
@@ -39106,6 +39141,7 @@ function soThrBoardOnDeleted(len) {
 // MESSAGE_SWIPE_DELETED（{messageId, swipeId, newSwipeId}；ST 已经 splice 完、swipe_id = newSwipeId）：先挪下标；活的批次一个 swipe 都不剩
 // = 它那条回复没了 → 按「删」处理；再按「划回 newSwipeId」处理。一次 commit。
 function soThrBoardOnSwipeDeleted(data) {
+    if (!soAutomatic.enabled()) return;
     if (!soThrBoardOn() || !soBdIsObj(data)) return false;
     const idx = Number(data.messageId);
     if (!Number.isInteger(idx)) return false;
@@ -39118,6 +39154,7 @@ function soThrBoardOnSwipeDeleted(data) {
 }
 // MESSAGE_EDITED（楼号；正文和 swipes[swipe_id] 都已写好）：改过的回复保住它的帖子——只跟着改 key。
 function soThrBoardOnEdited(id) {
+    if (!soAutomatic.enabled()) return;
     if (!soThrBoardOn()) return false;
     try {
         const idx = Number(id);
@@ -39130,6 +39167,7 @@ function soThrBoardOnEdited(id) {
 }
 // ✨ applyFixAsSwipe 加完新 swipe 之后：这一楼活的批次带到新 swipe 上（不重新补帖）。src = 校正前显示的那个 swipe：它不属于这份批次就什么都不带。
 function soThrBoardOnFixer(id, src) {
+    if (!soAutomatic.enabled()) return;
     if (!soThrBoardOn()) return false;
     const idx = Number(id);
     const at = soThrWeiyuAiAt(idx);
@@ -39143,6 +39181,7 @@ function soThrBoardOnFixer(id, src) {
 }
 // CHAT_CHANGED（换聊天 / 分支 / 重新载入）：这个聊天自己存的板对一遍楼号（分支里没有的回复 → 没碰过的批次撤回，定稿的照旧留着）。
 function soThrBoardOnChatLoad() {
+    if (!soAutomatic.enabled()) return;
     if (!soThrBoardOn()) return false;
     return soThrBoardWork(null).changed;
 }
@@ -39690,8 +39729,8 @@ function soThrBoardNoteSync() {
     let ctx = null;
     try { ctx = getCtx(); } catch (e) { ctx = null; }
     if (!ctx || typeof ctx.setExtensionPrompt !== 'function') return false;
-    const quiet = soThrBoardQuietOpen();   // quiet 正在拼 = 这一格只能是空的（借用期间也写：空值带不进任何请求；挪开期间写 = 小剧场不再放回原文）
-    const text = quiet ? '' : soThrBoardNoteText();
+    const quiet = !soAutomatic.enabled() || soThrBoardQuietOpen();   // quiet 正在拼 = 这一格只能是空的（借用期间也写：空值带不进任何请求；挪开期间写 = 小剧场不再放回原文）
+    const text = quiet || !soAutomatic.enabled() ? '' : soThrBoardNoteText();
     if (text === '' && !soThrBoardNoteLive && !soThrBoardNoteHeld(ctx)) return false;   // 从没登记过：不碰 ST
     if (!quiet && soThrBorrowing()) { soThrBoardNoteLater(); return false; }
     if (text === '' && !quiet && !soThrBoardNoteHeld(ctx)) { soThrBoardNoteLive = false; return false; }   // ST 换过登记表，里面本来就没有
@@ -39708,7 +39747,7 @@ function soThrBoardNoteSync() {
 }
 // ST 拼提示词时问这一格要不要（不给参数）。聊天内的槽 ST 其实不等它（微谕 t6）——留着它、说的与这一格本身一样（quiet 正在拼 = 不要）。
 function soThrBoardNoteFilter() {
-    return !soThrBoardQuietOpen();
+    return soAutomatic.enabled() && !soThrBoardQuietOpen();
 }
 // 非干跑的 GENERATION_STARTED（type, params, dryRun）：记下类型；quiet = 压 'q' 并同步清空这一格；别的类型顺手刷新一次（有 quiet 在拼时仍是空的）。
 function soThrBoardTellStarted(type, params, dryRun) {
@@ -47634,10 +47673,10 @@ function buildDirective(plan) {
 // (Re-)register the injection from the current chat's plan — or CLEAR it with an
 // empty string when there is none. Always safe to call; returns false only when
 // this ST build has no setExtensionPrompt at all.
-function applyPlanInjection() {
+function applyPlanInjection({ keepManualSuggestion = false } = {}) {
     // 🧭 1.87.0 下一拍建议：拍的一切变动（采用 / 完成推进 / 跳过 / ✏️ 编辑 / 强度 / 修订 / 放弃 / 切聊天）都经这里重登记——
     // 在这一处对卡：旧拍的候选与在途请求就地作废。
-    if (ENABLE_NEXT_BEAT) nbeatOnGuidanceChanged();
+    if (ENABLE_NEXT_BEAT && !keepManualSuggestion) nbeatOnGuidanceChanged();
     const ctx = getCtx();
     if (typeof ctx.setExtensionPrompt !== 'function') { if (ENABLE_DB_BRIDGE) dbBridgePublish(null); return false; }
     const s = getSettings();
@@ -47650,7 +47689,7 @@ function applyPlanInjection() {
     // plan — or clear it with '' when neither exists. The arc beat's text is stored
     // raw and substituted here; a single plan rebuilds via buildDirective (which
     // substitutes internally). Either way, substitution happens at registration.
-    const active = getActiveConstruct();
+    const active = soAutomatic.enabled() ? getActiveConstruct() : null;
     let text = '';
     let intensity = null;   // 🧭 1.78.0 快照口用：与 text 同源的强度档（盲盒拍也照带——Prince 2026-09-12）
     if (active && active.type === 'arc' && active.arc.currentBeat) {
@@ -47684,6 +47723,7 @@ function applyPlanInjection() {
         // 条目，否则模型只能瞎编人设（Discord 报障 + 根因核实：ST 只把 extensionPrompts[key].scan
         // 为真的槽塞进 world-info.js 的 WI 扫描缓冲，见 checkWorldInfo）。盲盒拍一并纳入——Prince
         // 已接受。落拍感应槽（上面）不跟——协议措辞通用，误触发世界书条目代价更大，仍是 false。
+        text = soFactDirective(text);
         ctx.setExtensionPrompt(ADVISOR_PROMPT_KEY, text, pos, depth, true, role);
         // 🧭 1.78.0：注册成功才发布快照（与槽里的文本同源）；空文本 = 清掉。
         if (ENABLE_DB_BRIDGE) {
@@ -47824,6 +47864,7 @@ function dbBridgeTextarea() {
 // 数据库的「策略2」就是读写输入框——所以输入框有正文就附到输入框；末条若是玩家消息（数据库「策略1」会先吃它：用户连发两句 /
 // 上一轮中止后留下的玩家楼）也附一份。两处都附、两处都剥：多附的那一份没人读，剥回即无痕。:8001 smoke 实测普通发送走输入框路。
 function dbBridgeAfterCommandsFirst(type, params, dryRun) {
+    if (!soAutomatic.enabled()) return;
     // 嵌套计数先于一切闸：每一发 emit 都要配对（外层闸没过也一样），否则 last 的减法对不上。
     dbBridgeRun.depth += 1;
     if (dbBridgeRun.depth > 1) return false;                        // 嵌套那发（酒馆助手 generateRaw 再 emit）：不附、不碰 pending
@@ -47954,6 +47995,7 @@ function dbBridgePublish(snapshot) {
 }
 // 只读快照口本体：每次返回新对象（调用方改不到我们的状态）。
 function dbBridgeGetActive() {
+    if (!soAutomatic.enabled()) return null;
     if (!ENABLE_DB_BRIDGE) return null;
     const p = dbBridgeSnap.published;
     if (!p) return null;
@@ -48169,6 +48211,7 @@ function glueArrayCarriesOurs(chat, slots) {
 // 没贴上（slot-missing / slot-dup / no-host / no-top / no-user / selfcheck / error）console.info 一行；闸拒绝、
 // empty-slots、外来数组静默。glueLast 仍是内存里的唯一记录。
 function onPromptReadyGlue(data) {
+    if (!soAutomatic.enabled()) return;
     // 🎭 小剧场预设路自己调 prepareOpenAIMessages 也会发 CHAT_COMPLETION_PROMPT_READY——那是小剧场的请求，不是主线叙述：静默放过（旗开 = 只在它拼提示词那一小段，soThrBorrowing）。
     if (ENABLE_THEATER && soThrBorrowing()) return false;
     let eligible = false;
@@ -48663,6 +48706,7 @@ async function seqAbandon() {
 // obsessing about the festival" reports happen. adoptedAt vs current length —
 // derived, nothing to keep in sync.
 function checkPlanReminder() {
+    if (!soAutomatic.enabled()) return;
     const active = getActiveConstruct();
     if (!active) return;
     if (active.type === 'arc') {
@@ -48670,7 +48714,7 @@ function checkPlanReminder() {
         // injection. Same 20-message threshold, spoiler-safe phrasing.
         const b = active.arc.currentBeat;
         if (!b || b.reminded) return;
-        const n = chatMsgCount() - (b.beatAdoptedAt || 0);
+        const n = soAutomatic.elapsed((b.beatAdoptedAt || 0));
         if (n >= ADVISOR_REMIND_AFTER) {
             b.reminded = true;
             setArc(active.arc);
@@ -48683,7 +48727,7 @@ function checkPlanReminder() {
         // 消息，按 adoptedAt 计时的话只会在整条序列开头提醒一次，此后每一拍都静默挂着。
         const seq = active.seq;
         if (seq.reminded) return;
-        const n = chatMsgCount() - (seq.beatStartAt || 0);
+        const n = soAutomatic.elapsed((seq.beatStartAt || 0));
         if (n < ADVISOR_REMIND_AFTER) return;
         seq.reminded = true;
         setSeq(seq);
@@ -48693,7 +48737,7 @@ function checkPlanReminder() {
     }
     const plan = active.plan;
     if (plan.reminded) return;
-    const n = chatMsgCount() - (plan.adoptedAt || 0);
+    const n = soAutomatic.elapsed((plan.adoptedAt || 0));
     if (n >= ADVISOR_REMIND_AFTER) {
         plan.reminded = true;
         setPlan(plan);
@@ -48709,6 +48753,7 @@ function checkPlanReminder() {
 // 已不在场（h.at > 最新 AI 楼，如删楼）；③拍推进/序列修订（seqAdvance/seqSpliceTail 自己
 // delete）；④手动 ✔ 恒权威（spec §5/§8，2026-08-30 修订）。
 function checkSeqPulse() {
+    if (!soAutomatic.enabled()) return;
     if (!ENABLE_SEQ_PULSE) return;
     const s = getSettings();
     if (s.seqPulse === false) return;
@@ -48734,6 +48779,7 @@ function checkSeqPulse() {
 // 有意不看 s.seqPulse 设置：与 renderSeqBarBody 1.73.0 起的行为一致（设置关掉后 checkSeqPulse
 // 不再产新 hint，闪烁自然随 hint 消失而停）。
 function seqPulseHintOn() {
+    if (!soAutomatic.enabled()) return false;
     if (!ENABLE_SEQ_PULSE) return false;
     const active = getActiveConstruct();
     if (!active || active.type !== 'seq') return false;
@@ -49289,6 +49335,7 @@ async function nbeatBuildRequest(cur) {
 
 // 生成（手动按钮 / 自动）。同一格在途时：自动直接让路；手动（重新生成 / 重试）掐掉旧的重来。
 async function nbeatGenerate(opts = {}) {
+    if (opts.auto && !soAutomatic.enabled()) return false;
     const cur = nbeatCurrent();
     if (!cur) { nbeatRefresh(); return false; }
     const key = nbeatStateKey(cur);
@@ -49297,7 +49344,7 @@ async function nbeatGenerate(opts = {}) {
         nbeatAbortInFlight();
     }
     const ctl = new AbortController();
-    const st = { key, status: 'busy', ctl, timedOut: false };
+    const st = { key, status: 'busy', ctl, timedOut: false, automaticTicket: opts.auto ? soAutomatic.ticket() : null };
     nbeatState = st;
     nbeatRefresh();
     const timer = setTimeout(() => { st.timedOut = true; try { ctl.abort(); } catch (e) { /* ignore */ } }, POST_REPLY_CALL_TIMEOUT_MS);
@@ -49315,6 +49362,7 @@ async function nbeatGenerate(opts = {}) {
     } finally {
         clearTimeout(timer);
     }
+    if (st.automaticTicket && !soAutomatic.valid(st.automaticTicket)) return false;
     if (nbeatState !== st) return false;                     // 已被停止 / 重来 / 换格——结果作废
     st.ctl = null;
     const now = nbeatCurrent();
@@ -49344,12 +49392,15 @@ async function nbeatGenerate(opts = {}) {
 // 自动生成：MESSAGE_RECEIVED 上即发即忘。先等回复后编排（自动校正会换 swipe、自动诊断可能写回更新块）收尾，
 // 再按【那一刻】的最新一楼判：同一格只自动跑一次、已有结果 / 在途都不重复花钱。
 async function nbeatOnMessageReceived(id, type) {
+    if (!soAutomatic.enabled()) return;
+    const automaticTicket = soAutomatic.ticket();
     if (!ENABLE_NEXT_BEAT) return;
     const s = getSettings();
     if (!s.nextBeatEnabled || !s.nextBeatAuto || type === 'first_message') return;
     const t0 = Date.now();
     await new Promise((r) => setTimeout(r, 0));
     while (postReplyBusy && (Date.now() - t0) < NBEAT_AUTO_WAIT_MS) await new Promise((r) => setTimeout(r, 250));
+    if (!soAutomatic.valid(automaticTicket)) return;
     const cur = nbeatCurrent();
     if (!cur || !cur.s.nextBeatAuto || cur.idx !== Number(id)) return;
     const key = nbeatStateKey(cur);
@@ -49400,6 +49451,9 @@ function nbeatLoadSettingsIntoForm(s) {
 // registers its plan, or clears any previous chat's injection. The extension's
 // only event-driven side effect; everything else stays pull-based.
 function onChatChanged() {
+    soAutomatic.invalidate();
+    pendingPostReplyRun = null;
+    if (activePostReplyRun && activePostReplyRun.automaticTicket) supersedePostReply();
     primeLwbFromMetadata();   // 小白X 记忆桥(a)：从本聊天 metadata 快照回填缓存（重开酒馆 / 切聊天即暖；自守门）
     // ✨ Phase 4 P-CORRUPT 的【1.77.0 修订】（Prince 亲裁 2026-09-04）：切聊天不再无条件作废在途那一轮。
     //   · 🩺 自动诊断 / 🎛 修改器写的是【当前聊天】的 MVU 状态 —— 切走即作废，这一条不变。
@@ -55244,7 +55298,7 @@ function cancelPostReply() {
 
 // 当前自动轮是否必须停止。手动取消与“新用户输入使旧轮过期”在执行层都要停，但只有前者应提示用户。
 function postReplyShouldStop() {
-    return postReplyCancelled || !!(activePostReplyRun && activePostReplyRun.superseded);
+    return postReplyCancelled || !!(activePostReplyRun && (activePostReplyRun.superseded || (activePostReplyRun.automaticTicket && !soAutomatic.valid(activePostReplyRun.automaticTicket))));
 }
 
 // MESSAGE_SENT 专用：静默让旧轮失效并撤掉尚未开跑的旧 AI pending。只中止 Story Oracle 自己的请求；
@@ -55286,6 +55340,7 @@ function supersedePostReplyOnChatSwitch() {
 // 不 await，保持与原 MESSAGE_RECEIVED 调度一样 fire-and-forget，也避免把旧轮的 finally 生命周期错误地
 // 延长到新轮。调用点必须先把 postReplyBusy 置回 false（否则补跑那一轮会立刻被锁挡下、再次入队）。
 function drainPendingPostReply() {
+    if (!soAutomatic.enabled()) { pendingPostReplyRun = null; return; }
     // 🎬 Stage 4：锁刚放开（两处调用点都在这之前把 postReplyBusy 置回 false）= 排队的小剧场可以不等轮询就开。没人在等 = 空操作。
     if (soThrConcOn()) soThrMainWake();
     const pending = pendingPostReplyRun;
@@ -55511,6 +55566,7 @@ async function awaitFixMvuBoundary(s, compatSession, capturedChatId) {
 }
 
 async function maybePostReply(messageId, type) {
+    if (!soAutomatic.enabled()) return;
     const ctx = getCtx(); if (!ctx) return;
     const s = getSettings();
     // 编排门控：autoFixEnabled 走【本聊天】生效配置（Phase 4 per-chat 迁移）；autoDiagnoseEnabled
@@ -55551,7 +55607,7 @@ async function maybePostReply(messageId, type) {
     // 🩺 诊断加固 Task 3：自动诊断的事务闸也认这【同一枚】锚点（它的模型往返比修改器长得多，
     // 更需要一个「这一轮开始时」的基准），故一并顺给 runAutoDiagnose。
     const chatKey = fixChatKey();
-    const run = { messageId: idx, superseded: false, step: null };   // step = 正在跑的处理器名（onChatChanged 据此决定作废谁）
+    const run = { messageId: idx, superseded: false, step: null, automaticTicket: soAutomatic.ticket() };   // step = 正在跑的处理器名（onChatChanged 据此决定作废谁）
     run.type = type;   // MESSAGE_RECEIVED 的 type（🎭 自动场景认「continue」：原样贴回存货，不再调模型）
     postReplyBusy = true;
     postReplyCancelled = false;                                 // 每轮开始清零；用户点提示「中断」会把它置真
@@ -60249,6 +60305,7 @@ function toastDiagChatSwitched() {
 // opts.noNote（可选）：只发 toast、【不留】侧聊记录。作用域不同是硬道理——toast 是会话级的环境提示，
 // 记录是聊天级的持久物；调用方判定「这条记录会落进一个无辜的对话」时用它（见 runAutoDiagnose 的注释）。
 function notifyAutoDiagnose(result, patch, writeBack, opts) {
+    if (activePostReplyRun && activePostReplyRun.automaticTicket && postReplyShouldStop()) return;
     const status = (result && result.status) || 'failed';
     const snapshot = status === 'applied' ? result.snapshot : null;
 
@@ -62947,6 +63004,11 @@ ${ENABLE_THEATER ? `
             </details>
         </div>
 
+        <div id="so-personal-controls" style="display:flex;flex-wrap:wrap;gap:8px;padding:8px">
+            <button type="button" class="so-plan-mini" id="so-personal-auto"></button>
+            <label><input type="checkbox" id="so-personal-float"> 隐藏引导悬浮窗</label>
+            <span class="so-hint" id="so-personal-save" aria-live="polite"></span>
+        </div>
         <div id="so-plan-bar">
             <div class="so-plan-head">
                 <i class="fa-solid fa-compass so-plan-icon"></i>
@@ -64636,6 +64698,12 @@ function bindControls() {
     // 完成 / 放弃：三构件共用，按 getActiveConstruct 分发（见 planBarDoneClick / planBarDropClick）。
     win.querySelector('#so-plan-done').addEventListener('click', planBarDoneClick);
     win.querySelector('#so-plan-drop').addEventListener('click', planBarDropClick);
+    win.querySelector('#so-personal-auto').addEventListener('click', soAutomaticToggle);
+    win.querySelector('#so-personal-float').addEventListener('change', (e) => {
+        getSettings().personalHidePlanFloat = e.target.checked; save(); placePlanBar();
+        win.querySelector('#so-personal-save').textContent = '本地设置已更新，保存请求已提交';
+    });
+    soAutomaticRefresh();
     // 序列专属：把整条序列送回参谋房继续讨论（旗关时模板里没有这枚钮）。
     if (ENABLE_PLAN_SEQ) {
         const sendBack = win.querySelector('#so-seq-sendback');
@@ -69663,6 +69731,7 @@ function addBridgeChip() {
  * 展开器、完成/放弃在两处都是同一批监听器，无需任何同步。
  * ------------------------------------------------------------------ */
 function renderPlanBar() {
+    soAutomaticRefresh();
     if (!planBarEl) return;
     // 任何重画都收起编辑器（1.48.0 不变量）—— 待播拍 ✏️ 的目标随之作废（1.72.0）。不复位的话，
     // 重画之后条上那枚铅笔会指着【上一次点开的待播拍】，把当前拍的字存到别人身上。
@@ -69963,14 +70032,14 @@ function renderArcShaping(arc) {
 function currentInjectionPreview() {
     const active = getActiveConstruct();
     if (!active) return '';
-    if (active.type === 'arc') return arcInjectionPreview(active.arc);
+    if (active.type === 'arc') return soFactDirective(arcInjectionPreview(active.arc));
     // 序列（1.72.0）：预览的永远是【当前拍】的实际注入——即使编辑器此刻的目标是某个待播拍
     // （seqEditBeatId），预览框读的仍是主聊天正在收到的那一份，两者有意不同源。
     if (active.type === 'seq') {
         const b = seqActiveBeat(active.seq);
-        return b ? buildDirective(b) : '';
+        return b ? soFactDirective(buildDirective(b)) : '';
     }
-    return buildDirective(active.plan);
+    return soFactDirective(buildDirective(active.plan));
 }
 function arcInjectionPreview(arc) {
     const b = arc.currentBeat;
@@ -70327,7 +70396,7 @@ function placePlanBar() {
     if (!planBarEl || !win) return;
     const active = getActiveConstruct();
     const winVisible = win.style.display !== 'none';
-    if (active && !winVisible) {
+    if (active && !winVisible && !getSettings().personalHidePlanFloat) {
         ensurePlanFloat();
         if (planBarEl.parentElement !== planFloatSlot) planFloatSlot.appendChild(planBarEl);
         planFloat.style.display = 'flex';
@@ -78344,6 +78413,7 @@ function showAutoFixGenerating() {
 // fixed / nochange / failed；problems = 「发现并修正」摘要（仅 fixed 有意义，可空）。窗口关着也留得下
 // （DOM 在 init 建好），随 per-chat 持久化、跨重载存活；是 note 条目、绝不回灌给模型（见 convoForPrompt）。
 function addAutoFixNote(status, problems, fix = null, meta = null) {
+    if (activePostReplyRun && activePostReplyRun.automaticTicket && postReplyShouldStop()) return;
     try {
         const stamp = (() => { try { return new Date().toLocaleTimeString(); } catch (e) { return ''; } })();
         // 📋 meta = { task:'custom', template } → 记录换族（customTaskNoteContent）；meta 为空 = 校正一族，字节不动。
@@ -78677,6 +78747,8 @@ async function fixLandResult(p) {
 // 回来时读全局，会拿【B 的捕获】比【B 的现状】判「不陈旧」，于是把 A 的正文写进 B 的楼层 = 跨聊天串写。
 // 所以捕获快照必须在 captureFixContext 返回后【立刻】取下、一路传到这里（三条运行路各取一次）。
 async function fixLandOrPark(payload, opts) {
+    if (activePostReplyRun && activePostReplyRun.automaticTicket && postReplyShouldStop()) return 'stale';
+    if (activePostReplyRun && activePostReplyRun.automaticTicket) payload.personalAutomaticTicket = activePostReplyRun.automaticTicket;
     const cap = payload.captured || null;
     const st = fixTargetStale(cap, fixCurrentSnapshot(payload.targetIdx), opts);
     if (!st.stale) { await fixLandResult(payload); return 'landed'; }
@@ -78692,6 +78764,7 @@ async function fixLandOrPark(payload, opts) {
 // 回到原聊天：把暂存的成品落地。onChatChanged 末尾 + drainPendingPostReply 里 fire-and-forget 调用
 // （与后者同一约定：事件监听不该被一趟 saveChat 拖住）。取出【先于】任何 await，重入不会落两遍。
 async function fixDrainParked() {
+    if (!soAutomatic.enabled()) return 'deferred';
     // 复审 minor #9：绝不与在飞的一轮交错落地（它随时会 applyFixAsSwipe / 写记录）。有轮在飞就让位，
     // 由那一轮 finally 里的 drainPendingPostReply 再唤我们一次（锁那时已释放）。
     if (postReplyBusy) return 'deferred';
@@ -78702,6 +78775,7 @@ async function fixDrainParked() {
     const entry = fixParkTake(fixParked, fixChatKey());
     fixParkSweep(fixParked, now);          // 本聊天这一份已经出槽，扫的是【别人】的过期 / 超额
     if (!entry) return null;
+    if (entry.personalAutomaticTicket && !soAutomatic.valid(entry.personalAutomaticTicket)) return null;
     if (now - (Number(entry.at) || 0) > FIX_PARK_TTL_MS) return null;   // 过期：与被扫掉时一样，静默不落地
     // 回来后再核一次：暂存期间这条回复可能在别处被换过 swipe / 编辑过 / 删掉了。mvuTolerant 恒 false ——
     // MVU 早在暂存前就写完了，容忍窗口没有意义，宁可判陈旧也不写坏。

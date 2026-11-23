@@ -1,0 +1,27 @@
+{
+  "requirements": "用户确认的最终开发需求 v1.0，及随后确认的四项边界规则",
+  "baseline": "97f01cc73faf345fa6dd34c9ac91828551462d84",
+  "branch": "personal/automatic-control",
+  "batches": [
+    { "name": "自动介入控制", "status": "implemented_pending_live_validation", "validation": "node --check index.js; node --test personal/automatic-control.test.mjs; git diff --check" },
+    { "name": "序列安全与手动管理", "status": "pending" },
+    { "name": "手动剧情校准", "status": "pending" },
+    { "name": "正式快照、规划归档和聊天级分类记忆", "status": "pending" },
+    { "name": "数据备份和 API 配置管理", "status": "pending" }
+  ],
+  "decisions": {
+    "pause": "聊天级单一总暂停；原有功能设置不变；手动操作可用；恢复不补跑",
+    "currentBeatDeletion": "确认时明确选择下一拍；无剩余可执行拍则结束；总暂停状态不变",
+    "reorder": "保持稳定当前拍身份；新增待执行拍不抢占；推进不得漏掉前面的待执行拍",
+    "facts": "已发生事实优先；计划和讨论建议不能转换为事实；模型表现需真实环境验证",
+    "calibration": "用户主动发起，展示事实依据和读取范围；逐项确认后采用",
+    "manualTasks": "暂停不取消用户主动任务，但其事件不能衍生自动任务"
+  },
+  "liveValidationRequired": [
+    "真实 SillyTavern 主聊天出站请求中四个 Story Oracle 提示词槽在暂停时为空",
+    "数据库联动临时文本清扫、借用提示词注册表时的暂停与恢复",
+    "自动诊断、变量写入、自动场景、微谕同步和论坛摘要在途时暂停再恢复，旧结果不落地",
+    "暂停期间手动参谋、模板校正、诊断、微谕和论坛操作仍可用",
+    "手机布局、完全隐藏悬浮窗、切聊天、刷新及重开酒馆"
+  ]
+}
