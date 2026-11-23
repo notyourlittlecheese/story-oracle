@@ -38920,14 +38920,14 @@ async function soThrBoardGenerate(req, ctl, o) {
 //（false = 没写：块据此报 gone）。探针臂的 replyKind / protect 并进来（产品里没有）。
 function soThrBoardDeps(o) {
     const opt = o && typeof o === 'object' ? o : {};
-    const automaticTicket = opt.silent || opt.postReply ? soAutomatic.ticket() : null;
+    const automaticTicket = !opt.manual && (opt.silent || opt.postReply) ? soAutomatic.ticket() : null;
     const allowed = () => !automaticTicket || soAutomatic.valid(automaticTicket);
     const cx = () => { try { return getCtx(); } catch (e) { return null; } };
     const d = {
         getState: () => { const st = soThrBoardState(); return st ? soBdFlowClone(st) : null; },
         commit: (st, why) => allowed() && soThrBoardCommit(st, why),
         chatKey: () => fixChatKey(),
-        canStart: () => allowed() && soThrBoardCanStart(opt),
+        canStart: () => allowed() ? soThrBoardCanStart(opt) : '自动介入已暂停或任务已失效',
         refused: () => soThrBoardRefusal(),
         prompt: (kind, win, args) => soThrBoardPrompt(kind, win, args),
         generate: (req, ctl) => allowed() ? soThrBoardGenerate(req, {
@@ -38940,7 +38940,7 @@ function soThrBoardDeps(o) {
         // 「读最近几楼」：0 = 一楼都不带；空 / 读不懂 = 全部（同今天每一个小剧场请求）
         depth: () => { const v = getSettings().contextDepth; if (soThrDepthNone(v)) return 0; const n = Number(v); return n > 0 ? n : Infinity; },
         meName: () => { const c = cx(); return String((c && c.name1) ?? ''); },
-        sumOn: soAutomatic.enabled() && soThrBoardSumOn() && opt.postReply !== true,   // 暂停时不由手动操作衍生后台摘要
+        sumOn: (opt.manual === true || soAutomatic.enabled()) && soThrBoardSumOn() && opt.postReply !== true,   // 显式摘要可手动运行；普通手动操作不衍生后台摘要
         silent: opt.silent === true,
     };
     if (soThrBoardModsOn()) d.mods = true;   // 🗂 stage 3：窗口带上版主、请求里多那一段和【论坛的管理】、读版务行、按权限落下、玩家发帖前过那道门
@@ -40028,7 +40028,7 @@ async function soThrBoardSumNow() {
     const outs = [];
     let done = 0;
     try {
-        done = Number(await soBdSumRun(soThrBoardDeps({ silent: true }), { pick, report: (tid, out) => { outs.push(String(out)); } })) || 0;
+        done = Number(await soBdSumRun(soThrBoardDeps({ silent: true, manual: true }), { pick, report: (tid, out) => { outs.push(String(out)); } })) || 0;
     } catch (e) {
         done = 0;   // soBdSumRun 本来就不抛；兜底
     }
@@ -47866,9 +47866,9 @@ function dbBridgeTextarea() {
 // 数据库的「策略2」就是读写输入框——所以输入框有正文就附到输入框；末条若是玩家消息（数据库「策略1」会先吃它：用户连发两句 /
 // 上一轮中止后留下的玩家楼）也附一份。两处都附、两处都剥：多附的那一份没人读，剥回即无痕。:8001 smoke 实测普通发送走输入框路。
 function dbBridgeAfterCommandsFirst(type, params, dryRun) {
-    if (!soAutomatic.enabled()) return;
     // 嵌套计数先于一切闸：每一发 emit 都要配对（外层闸没过也一样），否则 last 的减法对不上。
     dbBridgeRun.depth += 1;
+    if (!soAutomatic.enabled()) return;
     if (dbBridgeRun.depth > 1) return false;                        // 嵌套那发（酒馆助手 generateRaw 再 emit）：不附、不碰 pending
     try {
         // 🎭 小剧场在跑（旗开 = 只在它拼提示词那一小段，soThrBorrowing）：这一发不是主线叙述（主线发送会先同步中断小剧场、清掉 soThrRun）——不附、不碰输入框与聊天。

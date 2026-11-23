@@ -58,7 +58,7 @@ test('real injection function clears both slots and bridge, then restores custom
 });
 test('paused automatic event entrances return before touching model, metadata or event side effects', async () => {
     const f=fixture();f.control.setPaused(true);
-    for(const name of ['maybePostReply','checkSeqPulse','checkPlanReminder','dbBridgeAfterCommandsFirst','onPromptReadyGlue','soThrBoardSumKick','nbeatOnMessageReceived','soThrWeiyuOnReceived','soThrBoardOnReceived']) {
+    for(const name of ['maybePostReply','checkSeqPulse','checkPlanReminder','onPromptReadyGlue','soThrBoardSumKick','nbeatOnMessageReceived','soThrWeiyuOnReceived','soThrBoardOnReceived']) {
         const c=sandbox([name],{soAutomatic:f.control});
         await c[name](0,'normal');
     }
@@ -89,7 +89,7 @@ test('board background dependencies reject late commits and stale generations; m
     const c=sandbox(['soThrBoardDeps'],{
         soAutomatic:f.control,getCtx:()=>({chat:[]}), getSettings:()=>({contextDepth:10}),
         soThrBoardState:()=>({}), soBdFlowClone:s=>s, soThrBoardCommit:()=>{writes++;return true;},
-        fixChatKey:()=> 'A', soThrBoardCanStart:()=>true, soThrBoardRefusal:()=>'',
+        fixChatKey:()=> 'A', soThrBoardCanStart:()=>'', soThrBoardRefusal:()=>'',
         soThrBoardPrompt:()=>'',soThrBoardGenerate:async(req,ctl)=>{check=ctl.isStale;return {text:'result'};},
         soThrBoardReaderDeps:()=>({}),soThrBoardChatCx:()=>({}),soThrBoardSumOn:()=>true,
         soThrBoardModsOn:()=>false,soThrBoardArm:()=>({}),
@@ -97,8 +97,21 @@ test('board background dependencies reject late commits and stale generations; m
     const auto=c.soThrBoardDeps({silent:true}); await auto.generate({},{});
     f.control.setPaused(true);f.control.setPaused(false);
     assert.equal(check(),true);assert.equal(auto.commit({},'sum'),false);assert.equal(writes,0);
+    assert.ok(auto.canStart(), 'stale work must return a nonempty refusal reason');
     f.control.setPaused(true);const manual=c.soThrBoardDeps({});
-    assert.equal(manual.canStart(),true);assert.equal(manual.commit({},'edit'),true);assert.equal(manual.sumOn,false);
+    assert.equal(manual.canStart(),'');assert.equal(manual.commit({},'edit'),true);assert.equal(manual.sumOn,false);
+    const explicit=c.soThrBoardDeps({silent:true,manual:true});
+    assert.equal(explicit.canStart(),'');assert.equal(explicit.sumOn,true);
+    assert.equal(explicit.commit({},'sum'),true);
+});
+test('paused nested database callbacks retain balanced depth without injecting', () => {
+    const f=fixture();f.control.setPaused(true);
+    const run={depth:1,pending:{index:0}};
+    const c=sandbox(['dbBridgeAfterCommandsFirst','dbBridgeAfterCommandsLast'],{soAutomatic:f.control,dbBridgeRun:run});
+    c.dbBridgeAfterCommandsFirst('normal',{},false);
+    assert.equal(run.depth,2);
+    c.dbBridgeAfterCommandsLast();
+    assert.equal(run.depth,1);assert.deepEqual(run.pending,{index:0});
 });
 test('arc editor stays raw while the displayed injection includes the immutable fact rule', () => {
     const arc={currentBeat:{customText:'custom'}};
