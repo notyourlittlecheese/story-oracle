@@ -13,6 +13,7 @@
  */
 
 import { createAutomaticControl, FACT_PRIORITY } from './personal/automatic-control.mjs';
+import { previousCompletedIndex, undoSequenceCompletion } from './personal/sequence-undo.mjs';
 const MODULE = 'storyOracle';
 const soAutomatic = createAutomaticControl({ metadata: () => getChatMetadataSafe(), chatKey: () => fixChatKey(), messageCount: () => chatMsgCount(), save: () => saveChatMetadata() });
 function soAutomaticRefresh() {
@@ -48441,6 +48442,7 @@ function seqSpliceTail(seq, newBeats, now) {
 }
 
 function seqProgressLabel(seq) {
+    if (!seqActiveBeat(seq)) return `已结束 · 共 ${seq.beats.length} 拍`;
     return `第 ${seq.cursor + 1} / ${seq.beats.length} 拍`;
 }
 
@@ -48674,13 +48676,14 @@ function adoptSeq(parsed) {
     );
 }
 
-// 完成当前拍：推进或圆满收束（同 endPlan(done) 语义——清元数据 + 清注入 + 恢复原状）。
+// 完成当前拍：推进或收束；结束时保留序列供查看、撤回，清空注入。
 function seqComplete() {
     const seq = getSeq();
-    if (!seq) return;
+    if (!seq || !seqActiveBeat(seq)) return;
     const r = seqAdvance(seq, chatMsgCount());
     if (r.ended) {
-        setSeq(null);
+        seq.cursor = seq.beats.length;
+        setSeq(seq);
         applyPlanInjection();
         renderPlanBar();
         addSystemNote(`序列『${seq.title || '未命名'}』全部拍已完成，引导已停止——主聊天恢复原状。`);
@@ -48691,6 +48694,21 @@ function seqComplete() {
     renderPlanBar();
     const b = seqActiveBeat(seq);
     addSystemNote(`已进入${seqProgressLabel(seq)}：『${b.title || b.goal}』。`);
+}
+
+async function seqUndoComplete() {
+    const seq = getSeq();
+    const index = previousCompletedIndex(seq);
+    if (index < 0) return;
+    const chatKey = fixChatKey();
+    const snapshot = JSON.stringify(seq);
+    if (!(await uiConfirm('撤回上一拍的完成状态？当前拍会恢复为待执行，返回上一拍；所有剧情文本保留。'))) return;
+    if (fixChatKey() !== chatKey || getSeq() !== seq || JSON.stringify(seq) !== snapshot) {
+        addSystemNote('确认期间序列或聊天已变化，请重新操作。'); return;
+    }
+    if (!undoSequenceCompletion(seq, chatMsgCount(), seqPulseNonce(seq.pulseNonce))) return;
+    setSeq(seq); applyPlanInjection(); renderPlanBar();
+    addSystemNote('已撤回上一拍的完成状态，返回该拍。自动介入开关保持原状。');
 }
 
 // 放弃整条序列（带确认——比单拍损失大；同弧线退出惯例）。
@@ -48728,6 +48746,7 @@ function checkPlanReminder() {
         // 序列引导（1.72.0）：按【当前拍】计时（beatStartAt，推进即复位）——同一条序列会跨很多
         // 消息，按 adoptedAt 计时的话只会在整条序列开头提醒一次，此后每一拍都静默挂着。
         const seq = active.seq;
+        if (!seqActiveBeat(seq)) return;
         if (seq.reminded) return;
         const n = soAutomatic.elapsed((seq.beatStartAt || 0));
         if (n < ADVISOR_REMIND_AFTER) return;
@@ -63006,9 +63025,9 @@ ${ENABLE_THEATER ? `
             </details>
         </div>
 
-        <div id="so-personal-controls" style="display:flex;flex-wrap:wrap;gap:8px;padding:8px">
+        <div id="so-personal-controls" class="so-plan-actions">
             <button type="button" class="so-plan-mini" id="so-personal-auto"></button>
-            <label><input type="checkbox" id="so-personal-float"> 隐藏引导悬浮窗</label>
+            <label class="so-check so-lb-check"><input type="checkbox" id="so-personal-float"><span>隐藏引导悬浮窗</span></label>
             <span class="so-hint" id="so-personal-save" aria-live="polite"></span>
         </div>
         <div id="so-plan-bar">
@@ -63031,6 +63050,7 @@ ${ENABLE_THEATER ? `
                 <button type="button" class="so-plan-mini" id="so-plan-edit" title="编辑注入内容（保留原样的「节奏：」行则上方强度档仍可用）"><i class="fa-solid fa-pencil"></i></button>
                 <span class="so-plan-spacer"></span>
                 <button type="button" class="so-plan-mini so-plan-done" id="so-plan-done" title="目标已达成，停止引导">完成</button>
+                <button type="button" class="so-plan-mini" id="so-seq-undo" style="display:none">撤回上一拍完成</button>
                 ${ENABLE_PLAN_SEQ ? '<button type="button" class="so-plan-mini" id="so-seq-sendback" title="回参谋房继续聊——当前这一拍照常引导着，聊好可只重排剩余的拍" style="display:none">💬 找参谋改改</button>' : ''}
                 <button type="button" class="so-plan-mini so-plan-drop" id="so-plan-drop" title="不再需要，停止引导">放弃</button>
                 <button type="button" class="so-plan-mini so-plan-done" id="so-arc-complete" title="这一拍落地了，进入下一拍" style="display:none">完成</button>
@@ -64700,6 +64720,7 @@ function bindControls() {
     // 完成 / 放弃：三构件共用，按 getActiveConstruct 分发（见 planBarDoneClick / planBarDropClick）。
     win.querySelector('#so-plan-done').addEventListener('click', planBarDoneClick);
     win.querySelector('#so-plan-drop').addEventListener('click', planBarDropClick);
+    win.querySelector('#so-seq-undo').addEventListener('click', seqUndoComplete);
     win.querySelector('#so-personal-auto').addEventListener('click', soAutomaticToggle);
     win.querySelector('#so-personal-float').addEventListener('change', (e) => {
         getSettings().personalHidePlanFloat = e.target.checked; save(); placePlanBar();
@@ -69757,6 +69778,10 @@ function renderPlanBar() {
     }
     const isArc = active.type === 'arc';
     const isSeq = active.type === 'seq';                  // 序列引导（1.72.0；三方互斥，与 isArc 不同真）
+    planBarSetDisplay('#so-seq-undo', isSeq);
+    planBarEl.querySelector('#so-seq-undo').disabled = !isSeq || previousCompletedIndex(active.seq) < 0;
+    planBarEl.querySelector('#so-plan-done').disabled = isSeq && !seqActiveBeat(active.seq);
+    planBarEl.querySelector('#so-plan-edit').disabled = isSeq && !seqActiveBeat(active.seq);
     const isBlind = isArc && active.arc.mode === 'blind';
     const isTransparent = isArc && !isBlind;
     // Toggle button families by construct type: single-shot (完成/放弃) ·
